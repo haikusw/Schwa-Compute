@@ -37,9 +37,7 @@ enum MandelbrotDemo: Demo {
 
 
         kernel void hello_world(
-            device float *buffer [[buffer(0)]],
-            constant uint &width [[buffer(1)]],
-            constant uint &height [[buffer(2)]],
+            texture2d<float, access::write> texture [[texture(0)]],
             constant uint &max_iterations [[buffer(3)]],
             constant float &x_min [[buffer(4)]],
             constant float &x_max [[buffer(5)]],
@@ -49,8 +47,8 @@ enum MandelbrotDemo: Demo {
         const uint j = gid.x;
         const uint i = gid.y;
         auto c = Complex(
-            x_min + (float(j) / float(width - 1)) * (x_max - x_min),
-            y_min + (float(i) / float(height - 1)) * (y_max - y_min)
+            x_min + (float(j) / float(texture.get_width() - 1)) * (x_max - x_min),
+            y_min + (float(i) / float(texture.get_height() - 1)) * (y_max - y_min)
         );
 
         auto z = Complex();
@@ -60,7 +58,9 @@ enum MandelbrotDemo: Demo {
             iteration += 1;
         }
         // Normalize the iteration count to [0, 1]
-        buffer[i + j * width] = float(iteration) / float(max_iterations);
+        auto value = float(iteration) / float(max_iterations);
+        texture.write(value, gid);
+
         }
     """#
 
@@ -68,23 +68,28 @@ enum MandelbrotDemo: Demo {
         let device = MTLCreateSystemDefaultDevice()!
         let logger = Logger()
 
-        let width: UInt32 = 800;
-        let height: UInt32 = 800;
+        let width: UInt32 = 4096
+        let height: UInt32 = 4096
 
         // Mandelbrot parameters
-        let max_iterations: UInt32 = 1000
+        let max_iterations: UInt32 = 1024
         let x_min: Float = -2.0
         let x_max: Float = 1.0
         let y_min: Float = -1.5
         let y_max: Float = 1.5
 
-        let buffer = device.makeBuffer(length: MemoryLayout<Float>.size * Int(width) * Int(height), options: [])!
+        let textureDescriptor = MTLTextureDescriptor()
+        textureDescriptor.usage = .shaderWrite
+        textureDescriptor.pixelFormat = .r32Float
+        textureDescriptor.width = Int(width)
+        textureDescriptor.height = Int(height)
+
+        let texture = device.makeTexture(descriptor: textureDescriptor)!
+
         let compute = try Compute(device: device, logger: logger)
         let library = ShaderLibrary.source(source, enableLogging: true)
         var pipeline = try compute.makePipeline(function: library.hello_world)
-        pipeline.arguments.buffer = .buffer(buffer)
-        pipeline.arguments.width = .int(width)
-        pipeline.arguments.height = .int(height)
+        pipeline.arguments.texture = .texture(texture)
         pipeline.arguments.max_iterations = .int(max_iterations)
         pipeline.arguments.x_min = .float(x_min)
         pipeline.arguments.x_max = .float(x_max)
@@ -92,6 +97,10 @@ enum MandelbrotDemo: Demo {
         pipeline.arguments.y_max = .float(y_max)
 
         let w = Int(sqrt(Double(pipeline.maxTotalThreadsPerThreadgroup)))
-        try compute.run(pipeline: pipeline, threads: .init(Int(width), Int(height), 1), threadsPerThreadgroup: .init(width: w, height: w, depth: 1))
+        try timeit {
+            try compute.run(pipeline: pipeline, threads: .init(Int(width), Int(height), 1), threadsPerThreadgroup: .init(width: w, height: w, depth: 1))
+        }
+
+        try texture.export(to: URL(filePath: "/tmp/mandelbrot.png"), reveal: true)
     }
 }

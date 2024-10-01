@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Compute
 import CoreGraphics
@@ -140,19 +141,38 @@ class TextureToVideoWriter {
 }
 
 extension MTLTexture {
-    func export(to url: URL) throws {
-        assert(pixelFormat == .bgra8Unorm)
-        assert(depth == 1)
+    func export(to url: URL, reveal: Bool) throws {
+        try export(to: url)
+        if reveal {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
 
-        let bytesPerRow = width * MemoryLayout<UInt8>.size * 4
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.genericRGBLinear) else {
-            throw ComputeError.resourceCreationFailure
+    }
+
+    func export(to url: URL) throws {
+        let context: CGContext
+        let bytesPerRow: Int
+        switch (pixelFormat, depth) {
+        case (.bgra8Unorm, 1):
+            bytesPerRow = width * MemoryLayout<UInt8>.size * 4
+            guard let colorSpace = CGColorSpace(name: CGColorSpace.genericRGBLinear) else {
+                throw ComputeError.resourceCreationFailure
+            }
+            let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+                .union(.byteOrder32Little)
+            context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo.rawValue)!
+        case (.r32Float, 1):
+            bytesPerRow = width * MemoryLayout<Float>.size
+            guard let colorSpace = CGColorSpace(name: CGColorSpace.linearGray) else {
+                throw ComputeError.resourceCreationFailure
+            }
+            let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue | CGBitmapInfo.floatComponents.rawValue)
+                .union(.byteOrder32Little)
+            context = CGContext(data: nil, width: width, height: height, bitsPerComponent: MemoryLayout<Float>.size * 8, bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo.rawValue)!
+        default:
+            fatalError()
         }
-        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
-            .union(.byteOrder32Little)
-        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: colorSpace, bitmapInfo: bitmapInfo.rawValue) else {
-            throw ComputeError.resourceCreationFailure
-        }
+
         guard let contextData = context.data else {
             throw ComputeError.resourceCreationFailure
         }
